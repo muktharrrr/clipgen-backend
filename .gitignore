@@ -1,0 +1,22 @@
+# dependencies
+node_modules/
+
+# env
+.env
+.env.local
+
+# downloaded videos & clips
+*.mp4
+*.part
+public/clips/
+
+# yt-dlp temp files
+*.webm
+*.mkv
+
+# ffmpeg binaries
+ffmpeg.exe
+ffmpeg-static/
+
+# logs
+*.log

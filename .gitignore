@@ -5,18 +5,18 @@ node_modules/
 .env
 .env.local
 
-# downloaded videos & clips
+# videos & temp files
 *.mp4
 *.part
-public/clips/
-
-# yt-dlp temp files
 *.webm
 *.mkv
 
+# generated clips
+public/clips/
+
 # ffmpeg binaries
-ffmpeg.exe
 ffmpeg-static/
+ffmpeg.exe
 
 # logs
 *.log

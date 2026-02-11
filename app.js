@@ -9,31 +9,30 @@ const ffmpegPath = require("ffmpeg-static");
 
 ffmpeg.setFfmpegPath(ffmpegPath);
 
-/* ================================
-   GLOBAL STORES (in-memory)
-================================ */
-const progressMap = {}; // jobId -> progress %
-const resultMap = {};   // jobId -> clips[]
-const stepMap = {};     // jobId -> current step text
-
 const app = express();
 const PORT = process.env.PORT || 4000;
 
+/* ============================
+   MEMORY STORES
+============================ */
+const progressMap = {};
+const resultMap = {};
+const stepMap = {};
 
+/* ============================
+   MIDDLEWARE
+============================ */
 app.use(cors());
 app.use(express.json());
+app.use("/clips", express.static(path.join(__dirname, "public/clips")));
 
-// Serve generated clips
-app.use("/clips", express.static(path.join(__dirname, "public", "clips")));
-
-// Health check
 app.get("/", (req, res) => {
-  res.send("Backend is running ✅");
+  res.send("Backend running ✅");
 });
 
-/* ================================
-   PROGRESS API (polling)
-================================ */
+/* ============================
+   PROGRESS ENDPOINT
+============================ */
 app.get("/progress/:jobId", (req, res) => {
   const { jobId } = req.params;
 
@@ -44,75 +43,68 @@ app.get("/progress/:jobId", (req, res) => {
   });
 });
 
-/* ================================
-   MAIN API: START PROCESS
-================================ */
+/* ============================
+   START PROCESSING
+============================ */
 app.post("/process-video", async (req, res) => {
   const { youtubeUrl } = req.body;
 
   if (!youtubeUrl || !youtubeUrl.startsWith("http")) {
     return res.status(400).json({
       success: false,
-      error: "Invalid or missing YouTube URL",
+      error: "Invalid YouTube URL",
     });
   }
 
   const jobId = uuidv4();
-
-  // init state
   progressMap[jobId] = 0;
   stepMap[jobId] = "Starting…";
 
-  // 🔥 respond immediately
-  res.json({
-    success: true,
-    jobId,
-  });
+  res.json({ success: true, jobId });
 
   try {
-    console.log("🎬 Processing:", youtubeUrl);
-
     const videoPath = path.join(__dirname, `${jobId}.mp4`);
-    const clipsDir = path.join(__dirname, "public", "clips");
+    const clipsDir = path.join(__dirname, "public/clips");
 
     if (!fs.existsSync(clipsDir)) {
       fs.mkdirSync(clipsDir, { recursive: true });
     }
 
-    /* ---------------------------
-       1️⃣ Download video (0–30%)
-    ---------------------------- */
+    /* =======================
+       1️⃣ Download (0–30%)
+    ======================== */
     stepMap[jobId] = "Downloading video…";
 
     await ytdlp(youtubeUrl, {
       output: videoPath,
-      format: "bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4",
-      mergeOutputFormat: "mp4",
+      format: "mp4",
+      noCheckCertificates: true,
     });
 
     progressMap[jobId] = 30;
 
-    /* ---------------------------
-       2️⃣ Cut highlight clips (30–90%)
-    ---------------------------- */
-    stepMap[jobId] = "Cutting highlight clips…";
+    /* =======================
+       2️⃣ Generate Clips
+    ======================== */
+    stepMap[jobId] = "Generating clips…";
 
-    const clips = [];
-    const clipDurations = [
+    const clipTimes = [
       { start: 10, duration: 20 },
       { start: 40, duration: 20 },
       { start: 70, duration: 20 },
     ];
 
-    for (let i = 0; i < clipDurations.length; i++) {
+    const clips = [];
+
+    for (let i = 0; i < clipTimes.length; i++) {
       const clipId = uuidv4();
       const clipName = `clip-${clipId}.mp4`;
       const clipPath = path.join(clipsDir, clipName);
 
       await new Promise((resolve, reject) => {
         ffmpeg(videoPath)
-          .setStartTime(clipDurations[i].start)
-          .setDuration(clipDurations[i].duration)
+          .setStartTime(clipTimes[i].start)
+          .setDuration(clipTimes[i].duration)
           .outputOptions("-movflags faststart")
           .output(clipPath)
           .on("end", resolve)
@@ -121,21 +113,25 @@ app.post("/process-video", async (req, res) => {
       });
 
       progressMap[jobId] =
-        30 + Math.floor(((i + 1) / clipDurations.length) * 60);
+        30 + Math.floor(((i + 1) / clipTimes.length) * 60);
+
+      const baseUrl =
+        process.env.RENDER_EXTERNAL_URL ||
+        `http://localhost:${PORT}`;
 
       clips.push({
         id: clipId,
         title: `Highlight ${i + 1}`,
         duration: "00:20",
-        previewUrl: `http://localhost:${PORT}/clips/${clipName}`,
-        downloadUrl: `http://localhost:${PORT}/clips/${clipName}`,
+        previewUrl: `${baseUrl}/clips/${clipName}`,
+        downloadUrl: `${baseUrl}/clips/${clipName}`,
       });
     }
 
-    /* ---------------------------
-       3️⃣ Finalize (90–100%)
-    ---------------------------- */
-    stepMap[jobId] = "Finalizing clips…";
+    /* =======================
+       3️⃣ Finish
+    ======================== */
+    stepMap[jobId] = "Finalizing…";
     progressMap[jobId] = 100;
     resultMap[jobId] = clips;
 
@@ -143,14 +139,20 @@ app.post("/process-video", async (req, res) => {
       fs.unlinkSync(videoPath);
     }
 
-    console.log("✅ Job completed:", jobId);
+    // auto cleanup after 5 minutes
+    setTimeout(() => {
+      delete progressMap[jobId];
+      delete resultMap[jobId];
+      delete stepMap[jobId];
+    }, 300000);
+
   } catch (err) {
-    console.error("❌ ERROR:", err);
+    console.error("Processing Error:", err);
     progressMap[jobId] = -1;
     stepMap[jobId] = "Processing failed";
   }
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 Backend running on http://localhost:${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });
